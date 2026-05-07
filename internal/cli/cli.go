@@ -161,6 +161,8 @@ Commands:
   list          List all recorded sessions
   show <id>     Show terminal diff for a session
   report <id>   Generate HTML diff report
+  export         Export all sessions as JSON to stdout
+  export-csv     Export all sessions as CSV to stdout
   status        Check hook installation status
   help          Show this help message
 

@@ -35,6 +35,10 @@ func main() {
 		cli.Report(os.Args[2])
 	case "list":
 		cli.List(len(os.Args) > 2 && os.Args[2] == "--ai-only")
+	case "export":
+		cli.Export("json", "-")
+	case "export-csv":
+		cli.Export("csv", "-")
 	case "status":
 		cli.Status()
 	case "help", "--help", "-h":

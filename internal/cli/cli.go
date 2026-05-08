@@ -4,98 +4,120 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const (
 	hooksDir     = ".git/hooks"
 	sessionDir   = ".ai-sessions"
+	isWindows    = runtime.GOOS == "windows"
 	preCommitHook = `#!/bin/sh
 # AI Session Diff - Pre-commit hook
-# This hook snapshots file state before commit
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 SESSION_DIR="$REPO_DIR/.ai-sessions"
-
-if [ ! -d "$SESSION_DIR" ]; then
-    mkdir -p "$SESSION_DIR"
-fi
-
-# Generate session ID
+[ ! -d "$SESSION_DIR" ] && mkdir -p "$SESSION_DIR"
 SESSION_ID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "pre-$(date +%s)")
 BEFORE_DIR="$SESSION_DIR/$SESSION_ID/before"
 mkdir -p "$BEFORE_DIR"
-
-# Snapshot all staged files
 git diff --cached --name-only | while IFS= read -r file; do
-    if [ -f "$REPO_DIR/$file" ]; then
-        mkdir -p "$BEFORE_DIR/$(dirname "$file")"
-        cp "$REPO_DIR/$file" "$BEFORE_DIR/$file"
-    fi
+    [ -f "$REPO_DIR/$file" ] && cp "$REPO_DIR/$file" "$BEFORE_DIR/$file"
 done
-
-# Write pre-commit marker with session ID
 echo "$SESSION_ID" > "$SESSION_DIR/.current-session"
 exit 0
 `
-
 	postCommitHook = `#!/bin/sh
 # AI Session Diff - Post-commit hook
-# This hook records session metadata after commit
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 SESSION_DIR="$REPO_DIR/.ai-sessions"
-
-if [ ! -f "$SESSION_DIR/.current-session" ]; then
-    exit 0
-fi
-
+[ ! -f "$SESSION_DIR/.current-session" ] && exit 0
 SESSION_ID=$(cat "$SESSION_DIR/.current-session")
 rm -f "$SESSION_DIR/.current-session"
-
 AFTER_DIR="$SESSION_DIR/$SESSION_ID/after"
 mkdir -p "$AFTER_DIR"
-
-# Snapshot all committed files
 git ls-files | while IFS= read -r file; do
-    if [ -f "$REPO_DIR/$file" ]; then
-        mkdir -p "$AFTER_DIR/$(dirname "$file")"
-        cp "$REPO_DIR/$file" "$AFTER_DIR/$file"
-    fi
+    [ -f "$REPO_DIR/$file" ] && cp "$REPO_DIR/$file" "$AFTER_DIR/$file"
 done
-
-# Get commit info
 COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null)
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 COMMIT_MSG=$(git log -1 --format=%s 2>/dev/null || echo "")
 COMMIT_TIME=$(git log -1 --format=%cI 2>/dev/null || echo "")
-
-# Count changes
 LINES_ADDED=$(git diff --cached --numstat | awk '{add += $1} END {print add+0}')
 LINES_REMOVED=$(git diff --cached --numstat | awk '{sub += $2} END {print sub+0}')
-
-# Files changed
 FILES_CHANGED=$(git diff --cached --name-only | tr '\n' ' ')
-
-# Write metadata
+AI_PROVIDER=$([ -d "$REPO_DIR/.cursor" ] && echo "cursor" || echo "unknown")
+AI_DETECTED=$([ -d "$REPO_DIR/.cursor" ] && echo "true" || echo "false")
 cat > "$SESSION_DIR/$SESSION_ID/session.json" << EOF
-{
-  "id": "$SESSION_ID",
-  "startedAt": "$COMMIT_TIME",
-  "endedAt": "$COMMIT_TIME",
-  "commitSha": "$COMMIT_SHA",
-  "branch": "$BRANCH",
-  "filesChanged": [${FILES_CHANGED:0:-1}],
-  "aiProvider": "$([ -d "$REPO_DIR/.cursor" ] && echo "cursor" || echo "unknown")",
-  "aiDetected": $([ -d "$REPO_DIR/.cursor" ] && echo "true" || echo "false"),
-  "linesAdded": $LINES_ADDED,
-  "linesRemoved": $LINES_REMOVED,
-  "message": "$COMMIT_MSG"
-}
+{"id":"$SESSION_ID","startedAt":"$COMMIT_TIME","endedAt":"$COMMIT_TIME","commitSha":"$COMMIT_SHA","branch":"$BRANCH","filesChanged":["${FILES_CHANGED% }"],"aiProvider":"$AI_PROVIDER","aiDetected":$AI_DETECTED,"linesAdded":$LINES_ADDED,"linesRemoved":$LINES_REMOVED,"message":"$COMMIT_MSG"}
 EOF
-
 exit 0
+`
+	preCommitHookWin = `@echo off
+REM AI Session Diff - Pre-commit hook (Windows)
+setlocal enabledelayedexpansion
+set "SCRIPT_DIR=%~dp0"
+set "REPO_DIR=%SCRIPT_DIR%.."
+set "SESSION_DIR=%REPO_DIR%\.ai-sessions"
+if not exist "%SESSION_DIR%" mkdir "%SESSION_DIR%"
+for /f "delims=" %%i in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString()"') do set SESSION_ID=%%i
+set "BEFORE_DIR=%SESSION_DIR%\%SESSION_ID%\before"
+if not exist "%BEFORE_DIR%" mkdir "%BEFORE_DIR%"
+for /f "delims=" %%f in ('git diff --cached --name-only') do (
+    set "FILE=%%f"
+    set "SOURCE=%REPO_DIR%\!FILE!"
+    if exist "!SOURCE!" (
+        set "DEST=%BEFORE_DIR%\!FILE!"
+        for %%d in ("!DEST!") do if not exist "%%~dpd" mkdir "%%~dpd"
+        copy /Y "!SOURCE!" "!DEST!" >nul
+    )
+)
+echo %SESSION_ID% > "%SESSION_DIR%\.current-session"
+exit /b 0
+`
+	postCommitHookWin = `@echo off
+REM AI Session Diff - Post-commit hook (Windows)
+setlocal enabledelayedexpansion
+set "SCRIPT_DIR=%~dp0"
+set "REPO_DIR=%SCRIPT_DIR%.."
+set "SESSION_DIR=%REPO_DIR%\.ai-sessions"
+if not exist "%SESSION_DIR%\.current-session" exit /b 0
+set /p SESSION_ID=<"%SESSION_DIR%\.current-session"
+del "%SESSION_DIR%\.current-session" 2>nul
+set "AFTER_DIR=%SESSION_DIR%\%SESSION_ID%\after"
+if not exist "%AFTER_DIR%" mkdir "%AFTER_DIR%"
+for /f "delims=" %%f in ('git ls-files') do (
+    set "FILE=%%f"
+    set "SOURCE=%REPO_DIR%\!FILE!"
+    if exist "!SOURCE!" (
+        set "DEST=%AFTER_DIR%\!FILE!"
+        for %%d in ("!DEST!") do if not exist "%%~dpd" mkdir "%%~dpd"
+        copy /Y "!SOURCE!" "!DEST!" >nul
+    )
+)
+for /f "delims=" %%s in ('git rev-parse HEAD 2^>nul') do set COMMIT_SHA=%%s
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set BRANCH=%%b
+for /f "delims=" %%m in ('git log -1 --format=%%s 2^>nul') do set COMMIT_MSG=%%m
+for /f "delims=" %%t in ('git log -1 --format=%%cI 2^>nul') do set COMMIT_TIME=%%t
+git diff --cached --numstat > "%TEMP%\ai-diff-stats.txt"
+set LINES_ADDED=0
+set LINES_REMOVED=0
+for /f "usebackq tokens=1,2" %%a in ("%TEMP%\ai-diff-stats.txt") do (
+    set /a LINES_ADDED+=%%a
+    set /a LINES_REMOVED+=%%b
+)
+del "%TEMP%\ai-diff-stats.txt" 2>nul
+set "AI_PROVIDER=unknown"
+set "AI_DETECTED=false"
+if exist "%REPO_DIR%\.cursor" (
+    set "AI_PROVIDER=cursor"
+    set "AI_DETECTED=true"
+)
+set "FILES_JSON=["
+for /f "delims=" %%f in ('git diff --cached --name-only') do set "FILES_JSON=!FILES_JSON!\"%%f\","
+if defined FILES_JSON set FILES_JSON=[!FILES_JSON:~0,-1!]
+powershell -NoProfile -Command "$json = @{id='%SESSION_ID%';startedAt='%COMMIT_TIME%';endedAt='%COMMIT_TIME%';commitSha='%COMMIT_SHA%';branch='%BRANCH%';filesChanged=%FILES_JSON%;aiProvider='%AI_PROVIDER%';aiDetected=%AI_DETECTED%;linesAdded=%LINES_ADDED%;linesRemoved=%LINES_REMOVED%;message='%COMMIT_MSG%'} | ConvertTo-Json -Compress; Set-Content -Path '%SESSION_DIR%\%SESSION_ID%\session.json' -Value $json"
+exit /b 0
 `
 )
 
@@ -114,14 +136,22 @@ func Install() {
 
 	// Write pre-commit hook
 	prePath := filepath.Join(hooksDir, "pre-commit")
-	if err := os.WriteFile(prePath, []byte(preCommitHook), 0755); err != nil {
+	hookContent := preCommitHook
+	if isWindows {
+		hookContent = preCommitHookWin
+	}
+	if err := os.WriteFile(prePath, []byte(hookContent), 0755); err != nil {
 		fmt.Printf("✗ Failed to write pre-commit hook: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Write post-commit hook
 	postPath := filepath.Join(hooksDir, "post-commit")
-	if err := os.WriteFile(postPath, []byte(postCommitHook), 0755); err != nil {
+	hookContent = postCommitHook
+	if isWindows {
+		hookContent = postCommitHookWin
+	}
+	if err := os.WriteFile(postPath, []byte(hookContent), 0755); err != nil {
 		fmt.Printf("✗ Failed to write post-commit hook: %v\n", err)
 		os.Exit(1)
 	}

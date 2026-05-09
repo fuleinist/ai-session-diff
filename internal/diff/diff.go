@@ -22,6 +22,19 @@ type Hunk struct {
 	Lines              []string
 }
 
+type LineClass int
+
+const (
+	LineContext LineClass = iota
+	LineAdd
+	LineDel
+)
+
+type DiffLine struct {
+	Text  string
+	Class LineClass
+}
+
 type TerminalRenderer struct{}
 
 func (r TerminalRenderer) RenderDiff(beforeDir, afterDir string, files []string) (string, error) {
@@ -76,6 +89,42 @@ func computeUnifiedDiff(file string, oldLines, newLines []string) []string {
 	return result
 }
 
+// fileDiffLines returns the diff lines for a single file, with class labels.
+func fileDiffLines(file, beforeDir, afterDir string) []DiffLine {
+	beforePath := filepath.Join(beforeDir, file)
+	afterPath := filepath.Join(afterDir, file)
+
+	beforeData, err := os.ReadFile(beforePath)
+	if err != nil {
+		return []DiffLine{{Text: "(could not read before)", Class: LineContext}}
+	}
+	afterData, err := os.ReadFile(afterPath)
+	if err != nil {
+		return []DiffLine{{Text: "(could not read after)", Class: LineContext}}
+	}
+
+	beforeLines := strings.Split(string(beforeData), "\n")
+	afterLines := strings.Split(string(afterData), "\n")
+
+	lcs := longestCommonSubsequence(beforeLines, afterLines)
+
+	var lines []DiffLine
+	for _, line := range beforeLines {
+		if !contains(lcs, line) {
+			lines = append(lines, DiffLine{Text: "-" + line, Class: LineDel})
+		} else {
+			lines = append(lines, DiffLine{Text: " " + line, Class: LineContext})
+		}
+	}
+	for _, line := range afterLines {
+		if !contains(lcs, line) {
+			lines = append(lines, DiffLine{Text: "+" + line, Class: LineAdd})
+		}
+	}
+
+	return lines
+}
+
 func longestCommonSubsequence(a, b []string) []string {
 	m, n := len(a), len(b)
 	dp := make([][]int, m+1)
@@ -126,12 +175,46 @@ func contains(slice []string, item string) bool {
 type HTMLRenderer struct{}
 
 func (r HTMLRenderer) RenderReport(beforeDir, afterDir string, s *session.Session) (string, error) {
-	html := `<!DOCTYPE html>
+	// Build per-file diff blocks
+	var fileBlocks strings.Builder
+	for _, file := range s.FilesChanged {
+		lines := fileDiffLines(file, beforeDir, afterDir)
+		fileBlocks.WriteString(fmt.Sprintf(`            <div class="file-card">
+                <div class="file-header">
+                    <span class="file-name">%s</span>
+                </div>
+                <div class="diff-content">
+`, file))
+		for _, line := range lines {
+			class := "line-context"
+			if line.Class == LineAdd {
+				class = "line line-add"
+			} else if line.Class == LineDel {
+				class = "line line-del"
+			}
+			// Escape HTML entities in line text
+			escaped := strings.ReplaceAll(line.Text, "&", "&amp;")
+			escaped = strings.ReplaceAll(escaped, "<", "&lt;")
+			escaped = strings.ReplaceAll(escaped, ">", "&gt;")
+			fileBlocks.WriteString(fmt.Sprintf(`                    <div class="%s">%s</div>
+`, class, escaped))
+		}
+		fileBlocks.WriteString(`                </div>
+            </div>
+`)
+	}
+
+	aiBadge := ""
+	if s.AIDetected {
+		aiBadge = fmt.Sprintf(`<span class="ai-badge">🤖 %s</span>`, s.AIProvider)
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Session Diff - ` + s.ID + `</title>
+    <title>AI Session Diff - %s</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; }
@@ -166,38 +249,20 @@ func (r HTMLRenderer) RenderReport(beforeDir, afterDir string, s *session.Sessio
     <div class="header">
         <h1>⚡ AI Session Diff</h1>
         <div class="meta">
-            <span>📅 ` + s.StartedAt + `</span>
-            <span>🌿 ` + s.Branch + `</span>
-            <span>🔖 ` + s.CommitSha[:7] + `</span>
-            <span>+` + fmt.Sprintf("%d", s.LinesAdded) + `</span>
-            <span>-` + fmt.Sprintf("%d", s.LinesRemoved) + `</span>
-            ` + func() string {
-		if s.AIDetected {
-			return `<span class="ai-badge">🤖 ` + s.AIProvider + `</span>`
-		}
-		return ""
-	}() + `
+            <span>📅 %s</span>
+            <span>🌿 %s</span>
+            <span>🔖 %s</span>
+            <span>+%d</span>
+            <span>-%d</span>
+            %s
         </div>
     </div>
     <div class="content">
         <div class="file-list">
-            <div class="file-card">
-                <div class="file-header">
-                    <span class="file-name">session-overview</span>
-                    <span class="file-stats">
-                        <span class="stats-add">+` + fmt.Sprintf("%d", s.LinesAdded) + `</span>
-                        <span class="stats-del">-` + fmt.Sprintf("%d", s.LinesRemoved) + `</span>
-                    </span>
-                </div>
-                <div class="diff-content">
-                    <div class="line line-context">Files changed: ` + fmt.Sprintf("%d", len(s.FilesChanged)) + `</div>
-                    <div class="line line-context">Session: ` + s.ID + `</div>
-                    <div class="line line-context">Message: ` + s.Message + `</div>
-                </div>
-            </div>
-        </div>
+%s        </div>
     </div>
 </body>
-</html>`
+</html>`, s.ID, s.StartedAt, s.Branch, s.CommitSha[:7], s.LinesAdded, s.LinesRemoved, aiBadge, fileBlocks.String())
+
 	return html, nil
 }

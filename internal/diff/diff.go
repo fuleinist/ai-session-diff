@@ -51,25 +51,22 @@ func computeUnifiedDiff(file string, oldLines, newLines []string) []string {
 	result = append(result, fmt.Sprintf("--- a/%s", file))
 	result = append(result, fmt.Sprintf("+++ b/%s", file))
 
-	oldContent := strings.Join(oldLines, "\n")
-	newContent := strings.Join(newLines, "\n")
+	lcs := longestCommonSubsequence(oldLines, newLines)
 
-	oldWords := strings.Fields(oldContent)
-	newWords := strings.Fields(newContent)
-
-	lcs := longestCommonSubsequence(oldWords, newWords)
-
-	additions := len(newWords) - len(lcs)
-	deletions := len(oldWords) - len(lcs)
+	additions := len(newLines) - len(lcs)
+	deletions := len(oldLines) - len(lcs)
 
 	result = append(result, fmt.Sprintf("@@ -1,%d +1,%d @@", len(oldLines), len(newLines)))
 
-	for _, w := range newWords {
-		result = append(result, "\x1b[32m+"+w+"\x1b[0m")
+	// Interleave additions (+new only) and deletions (-old only)
+	for _, line := range newLines {
+		if !contains(lcs, line) {
+			result = append(result, "\x1b[32m+"+line+"\x1b[0m")
+		}
 	}
-	for _, w := range oldWords {
-		if !contains(lcs, w) {
-			result = append(result, "\x1b[31m-"+w+"\x1b[0m")
+	for _, line := range oldLines {
+		if !contains(lcs, line) {
+			result = append(result, "\x1b[31m-"+line+"\x1b[0m")
 		}
 	}
 

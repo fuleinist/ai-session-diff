@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fuleinist/ai-session-diff/internal/diff"
 	"github.com/fuleinist/ai-session-diff/internal/session"
@@ -56,11 +57,20 @@ func Report(sessionID string) {
 	fmt.Printf("✓ Report generated: %s\n", reportPath)
 }
 
-func List(aiOnly bool) {
+func List(aiOnly bool, since string) {
 	sessions, err := session.ListAll()
 	if err != nil {
 		fmt.Printf("✗ Failed to list sessions: %v\n", err)
 		os.Exit(1)
+	}
+
+	if since != "" {
+		sinceTime, err := parseDate(since)
+		if err != nil {
+			fmt.Printf("✗ Invalid --since date format: %s (use YYYY-MM-DD)\n", since)
+			os.Exit(1)
+		}
+		sessions = filterSessionsSince(sessions, sinceTime)
 	}
 
 	if len(sessions) == 0 {
@@ -93,6 +103,36 @@ func List(aiOnly bool) {
 			aiTag,
 		)
 	}
+}
+
+func filterSessionsSince(sessions []session.Session, since int64) []session.Session {
+	var filtered []session.Session
+	for _, s := range sessions {
+		if t, err := parseTimestamp(s.StartedAt); err == nil && t >= since {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
+func parseDate(s string) (int64, error) {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return 0, err
+	}
+	return t.Unix(), nil
+}
+
+func parseTimestamp(s string) (int64, error) {
+	// Try RFC3339 first
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Unix(), nil
+	}
+	// Try date-only (YYYY-MM-DD)
+	if len(s) >= 10 {
+		return parseDate(s[:10])
+	}
+	return 0, fmt.Errorf("unparseable timestamp: %s", s)
 }
 
 func Status() {

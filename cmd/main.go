@@ -34,7 +34,17 @@ func main() {
 		}
 		cli.Report(os.Args[2])
 	case "list":
-		cli.List(len(os.Args) > 2 && os.Args[2] == "--ai-only")
+		since := ""
+		aiOnly := false
+		for i := 2; i < len(os.Args); i++ {
+			if os.Args[i] == "--ai-only" {
+				aiOnly = true
+			} else if os.Args[i] == "--since" && i+1 < len(os.Args) {
+				since = os.Args[i+1]
+				i++
+			}
+		}
+		cli.List(aiOnly, since)
 	case "export":
 		cli.Export("json", "-")
 	case "export-csv":

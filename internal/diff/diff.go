@@ -66,25 +66,40 @@ func computeUnifiedDiff(file string, oldLines, newLines []string) []string {
 
 	lcs := longestCommonSubsequence(oldLines, newLines)
 
-	additions := len(newLines) - len(lcs)
-	deletions := len(oldLines) - len(lcs)
-
-	result = append(result, fmt.Sprintf("@@ -1,%d +1,%d @@", len(oldLines), len(newLines)))
-
-	// Interleave additions (+new only) and deletions (-old only)
-	for _, line := range newLines {
-		if !contains(lcs, line) {
-			result = append(result, "\x1b[32m+"+line+"\x1b[0m")
+	// Build diff using LCS-based algorithm
+	i, j := 0, 0
+	lcsIdx := 0
+	
+	for lcsIdx < len(lcs) {
+		// Skip deletions in oldLines
+		for i < len(oldLines) && oldLines[i] != lcs[lcsIdx] {
+			result = append(result, "\x1b[31m-"+oldLines[i]+"\x1b[0m")
+			i++
+		}
+		// Skip additions in newLines
+		for j < len(newLines) && newLines[j] != lcs[lcsIdx] {
+			result = append(result, "\x1b[32m+"+newLines[j]+"\x1b[0m")
+			j++
+		}
+		// Context line (in LCS)
+		if i < len(oldLines) && j < len(newLines) {
+			result = append(result, " "+oldLines[i])
+			i++
+			j++
+			lcsIdx++
 		}
 	}
-	for _, line := range oldLines {
-		if !contains(lcs, line) {
-			result = append(result, "\x1b[31m-"+line+"\x1b[0m")
-		}
+	
+	// Remaining deletions in oldLines
+	for i < len(oldLines) {
+		result = append(result, "\x1b[31m-"+oldLines[i]+"\x1b[0m")
+		i++
 	}
-
-	_ = additions
-	_ = deletions
+	// Remaining additions in newLines
+	for j < len(newLines) {
+		result = append(result, "\x1b[32m+"+newLines[j]+"\x1b[0m")
+		j++
+	}
 
 	return result
 }
